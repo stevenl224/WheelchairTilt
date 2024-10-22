@@ -1,10 +1,24 @@
 #include <Wire.h>
 #include <RTC.h>
 #include <MPU6050.h>
+#include <Adafruit_TLC5947.h>
 
+// Represents number of LED boards used
+#define NUM_TLC5947 1
+
+// Defining pins
+#define data   4
+#define clock   5
+#define latch   6
+
+// Initialize LED Driver
+Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5947, clock, data, latch);
 
 // Initialize Gyroscope
 MPU6050 mpu;
+
+// Initialize variables
+int speakerPin = 9;
 
 // The following are various Constant Values that can be adjusted according to conditions
 
@@ -19,7 +33,7 @@ const long interval = 10000;
 // once its time to exercise, this is how long of a window they have to do their exercise, it should be atleast 2 times as long as the duration they need to hold the tilt
 const long exerciseWindow = 20000; 
 
-// how long the rhonda needs to hold the angle for in order for it to be a succesful session
+// how long the user needs to hold the angle for in order for it to be a succesful session
 const unsigned long exerciseDuration = 5000; 
 
 // minimum tilt angle to consider the exercise started (will need to be adjusted on the fly)
@@ -32,6 +46,7 @@ bool waitingForExercise = false;
 
 // Counts how many times they did their exercise throughout the day
 int dailyExerciseCount = 0;
+int prevExerciseCount = -1;
 
 // Setup
 void setup() {
@@ -39,15 +54,15 @@ void setup() {
   delay(1000);
   Wire.begin();
   RTC.begin();
+  tlc.begin();
 
   // Initialize the MPU6050 sensor
-  mpu.initialize();    
+  mpu.initialize();
   if (mpu.testConnection()) {
     Serial.println("MPU6050 connection successful");
   } else {
     Serial.println("MPU6050 connection failed");
   }
-
 
   // This section of the code automatically detects time of compilation 
   String testtime = __TIME__;   // holds the compile time in "HH:MM:SS"
@@ -74,6 +89,7 @@ void loop() {
     Serial.println("Board Inactive");
     active = false;
     dailyExerciseCount = 0;
+    resetLEDs();
   }
 
   if (active) {
@@ -81,7 +97,7 @@ void loop() {
     if (millis() - previousMillis >= interval) {
       Serial.println("It's time to do your exercise!!");
       // ADD CODE HERE FOR NOTIFYING USER IT IS TIME TO BEGIN THEIR EXERVCISE (FLASHING LIGHT)
-
+      LEDActivityReminder();
 
 
 
@@ -107,10 +123,70 @@ void loop() {
   }
 
   // ADD CODE HERE TO PRINT OUT HOW MANY LEDS SHOULD BE ON BASED ON THE VALUE OF dailyExerciseCount
-
-
+  if (dailyExerciseCount != prevExerciseCount) {
+    checkCompletion();
+    prevExerciseCount = dailyExerciseCount;
+  }
   
   delay(500);
+}
+
+// Lights up the number of lights according to the completed daily exercise count
+void checkCompletion() {
+  int numLEDsToLight = min(dailyExerciseCount, 6);  // Caps the number of lit LEDs to 6
+  
+  for (int j = 0; j < 6; j++) {
+    tlc.setPWM(j, 0);
+  }
+
+  for (int i = 0; i < numLEDsToLight; i++) {
+    tlc.setPWM(i, 2400); // set each LED to full brightness
+  }
+
+  tlc.write(); // Write to the TLC5947
+}
+
+void resetLEDs() {
+  Serial.println("New day. All completed tilts are reset.");
+
+  // Turn off all LEDs
+  for (int i = 0; i < 6; i++) {
+    tlc.setPWM(i, 0);
+  }
+
+  // Turn off all LEDs
+  for (int i = 0; i <= 6; i++) {
+    tlc.setPWM(i, 0);
+  }
+
+  tlc.write(); // Write to the TLC5947
+}
+
+void LEDActivityReminder() {
+  unsigned long flickerDuration = 10000;  // Flicker for 10 seconds
+  unsigned long flickerInterval = 500;  // Delay for 0.5 seconds between flickers
+  unsigned long startTime = millis();  // Record the start time
+
+  Serial.println("Reminder: It's time to tilt again!");
+
+  while (millis() - startTime < flickerDuration) {
+    // Turn on LED at index 6 to full brightness
+    tlc.setPWM(6, 2400);
+    tlc.write();
+    delay(flickerInterval);
+
+    // Turn off LED at index 6
+    tlc.setPWM(6, 0);
+    tlc.write();
+    delay(flickerInterval);
+  }
+}
+
+// Function to play a tone of 1kHz frequency for 2 seconds
+void playSpeaker() {
+  tone(speakerPin, 1000);
+  delay(2000);
+  noTone(speakerPin);
 }
 
 void checkTilt() {
@@ -142,7 +218,7 @@ void checkTilt() {
         Serial.print("Good job! You did your exercise this time. Total Exercises Today: ");
         Serial.println(dailyExerciseCount);
         // ADD CODE HERE TO PLAY SUCESS MUSIC 
-
+        playSpeaker();
 
 
         
