@@ -2,6 +2,43 @@
 #include <RTC.h>
 #include <MPU6050.h>
 #include <Adafruit_TLC5947.h>
+#include <DFRobotDFPlayerMini.h>
+#include <SoftwareSerial.h>
+#include <Bridge.h>
+#include <FileIO.h>
+
+// Encoder 1 Pins       all wires that arent below are going to ground for the encoder
+const int clkPin = 3; // brown wire
+const int dtPin = 2;  // silver wire
+const int swPin = 7;  // black wire
+
+// Encoder 2 Pins       all wires that arent below are going to ground for the encoder
+const int clkPin2 = 12; // pink wire
+const int dtPin2 = 11;  // blue wire
+const int swPin2 = 10;  // black wire
+
+// Encoder Constants
+int clkState, dtState;
+int lastClkState;
+int stepCounter = 0;
+float currentAngle = 0.0;
+const int stepsPerRevolution = 20;
+float anglePerStep = 360.0 / stepsPerRevolution;
+
+// Second encoder for exercise duration adjustment
+int clkState2, dtState2;
+int lastClkState2;
+int stepCounter2 = 0;
+float currentAngle2 = 0.0;
+
+// Debounce timing variables
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 0.1;
+
+// Button hold timing variables
+unsigned long buttonPressStart1 = 0;
+unsigned long buttonpressStart2 = 0;
+const unsigned long holdTimeRequired = 3000;
 
 // Represents number of LED boards used
 #define NUM_TLC5947 1
@@ -10,6 +47,14 @@
 #define data   4
 #define clock   5
 #define latch   6
+
+// Define pins 8 and 9 to communicate with DFPlayer Mini
+static const uint8_t PIN_MP3_TX = 8; // Connects to the module's RX
+static const uint8_t PIN_MP3_RX = 9; // Connects to the module's TX
+SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
+
+// Create the DF player object
+DFRobotDFPlayerMini player; 
 
 // Initialize LED Driver
 Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5947, clock, data, latch);
@@ -20,43 +65,57 @@ MPU6050 mpu;
 // Initialize variables
 int speakerPin = 9;
 
-// The following are various Constant Values that can be adjusted according to conditions
-
-// varibles used for timer calculations (DO NOT CHANGE)
+// Timer variables
 unsigned long previousMillis = 0; 
 unsigned long exerciseStartTime = 0; 
 unsigned long waitingStartTime = 0;
 
-// time to wait before notifying them to exercise again (for mvp it will be 30 min)
-const long interval = 10000;  
-
-// once its time to exercise, this is how long of a window they have to do their exercise, it should be atleast 2 times as long as the duration they need to hold the tilt
+// Interval configuration
+long interval = 10000;  
 const long exerciseWindow = 20000; 
-
-// how long the user needs to hold the angle for in order for it to be a succesful session
-const unsigned long exerciseDuration = 5000; 
-
-// minimum tilt angle to consider the exercise started (will need to be adjusted on the fly)
+unsigned long exerciseDuration = 5000;
 const unsigned long minTiltAngle = 15;
 
-// intitialize various states and sub-states of the board to false for now
+// Status and tracking variables
 bool active = false; 
 bool exerciseStarted = false;
 bool waitingForExercise = false;
-
-// Counts how many times they did their exercise throughout the day
 int dailyExerciseCount = 0;
 int prevExerciseCount = -1;
 
+// Purely for debugging purposes and result readability
+unsigned long lastPrintTime = 0; 
+const unsigned long printInterval = 500;
+
+// Maximum number of tracks in the micro sd card
+long numOfTracks = 0;
+
+// Volume control
+long volumeLevel = 30;
+
 // Setup
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(230400);
+  softwareSerial.begin(9600);
   delay(1000);
+  FileSystem.begin();
+  Bridge.begin();
   Wire.begin();
   RTC.begin();
   tlc.begin();
 
-  // Initialize the MPU6050 sensor
+  // Encoder setup
+  pinMode(clkPin, INPUT_PULLUP);
+  pinMode(dtPin, INPUT_PULLUP);
+  pinMode(swPin, INPUT_PULLUP);
+  lastClkState = digitalRead(clkPin);
+
+  // Encoder 2 setup for exercise duration
+  pinMode(clkPin2, INPUT_PULLUP);
+  pinMode(dtPin2, INPUT_PULLUP);
+  pinMode(swPin2, INPUT_PULLUP);
+  lastClkState2 = digitalRead(clkPin2);
+
   mpu.initialize();
   if (mpu.testConnection()) {
     Serial.println("MPU6050 connection successful");
@@ -64,174 +123,300 @@ void setup() {
     Serial.println("MPU6050 connection failed");
   }
 
-  // This section of the code automatically detects time of compilation 
-  String testtime = __TIME__;   // holds the compile time in "HH:MM:SS"
-  int testHour = testtime.substring(0, 2).toInt();   // Convert hour part to integer
-  int testMinute = testtime.substring(3, 5).toInt(); // Convert minute part to integer
-  int testSecond = testtime.substring(6, 8).toInt(); // Convert second part to integer
+  if (player.begin(softwareSerial)) {
+    Serial.println("Serial connection with DFPlayer established.");
+  } else {
+    Serial.println("Connecting to DFPlayer Mini failed!");
+  }
 
-  // Initialize date and time for the RTC module
-  RTCTime startTime(10, Month::OCTOBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE); 
+  String testtime = __TIME__;
+  int testHour = testtime.substring(0, 2).toInt();
+  int testMinute = testtime.substring(3, 5).toInt();
+  int testSecond = testtime.substring(6, 8).toInt();
+  RTCTime startTime(10, Month::NOVEMBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
   RTC.setTime(startTime);
+
+  countMP3s();
+  randomSeed(millis());  // Generate a random seed to help randomly choose track from sd card
+}
+
+
+// Function to update interval based on angle
+void updateIntervalFromAngle(float angle) {
+    if (angle >= 0 && angle < 120) {
+        interval = 11000;
+    } else if (angle >= 120 && angle < 240) {
+        interval = 12000;
+    } else if (angle >= 240 && angle <= 360) {
+        interval = 13000;
+    }
+}
+
+// Function to update exercise duration based on angle from second encoder
+void updateExerciseDurationFromAngle(float angle) {
+    if (angle >= 0 && angle < 120) {
+        exerciseDuration = 4000;
+    } else if (angle >= 120 && angle < 240) {
+        exerciseDuration = 5000;
+    } else if (angle >= 240 && angle <= 360) {
+        exerciseDuration = 6000;
+    }
+}
+
+
+
+
+// Updated Encoder 1 angle function with improved reset handling
+void updateEncoderAngle() {
+    unsigned long currentTime = millis();
+    clkState = digitalRead(clkPin);
+
+    // Check if encoder state changed with debounce
+    if ((clkState != lastClkState) && (currentTime - lastDebounceTime > debounceDelay)) {
+        lastDebounceTime = currentTime;
+        dtState = digitalRead(dtPin);
+        if (clkState == HIGH && dtState == LOW) {
+            stepCounter++;
+        } else if (clkState == HIGH && dtState == HIGH) {
+            stepCounter--;
+        }
+
+        currentAngle = stepCounter * anglePerStep;
+        currentAngle = fmod(currentAngle, 360.0);
+        if (currentAngle < 0.0) {
+            currentAngle += 360.0;
+        }
+
+        updateIntervalFromAngle(currentAngle);
+
+        Serial.print("Steps: ");
+        Serial.print(stepCounter);
+        Serial.print(" | Current Angle: ");
+        Serial.print(currentAngle);
+        Serial.println("°");
+    }
+
+    // Button press reset handling with dedicated timing
+    if (digitalRead(swPin) == LOW) {
+        if (buttonPressStart1 == 0) {
+            buttonPressStart1 = currentTime;  // Record start time if button is pressed
+        }
+        if (currentTime - buttonPressStart1 >= holdTimeRequired) {
+            stepCounter = 0;
+            currentAngle = 0.0;
+            Serial.println("Angle reset to 0° after holding button for 3 seconds");
+            buttonPressStart1 = 0;  // Reset the press start time after reset action
+        }
+    } else {
+        buttonPressStart1 = 0;  // Reset timing if button is not held
+    }
+
+    lastClkState = clkState;
+}
+
+// Function to update angle and exercise duration based on second encoder
+void updateEncoderAngle2() {
+    unsigned long currentTime = millis();
+    clkState2 = digitalRead(clkPin2);
+    if ((clkState2 != lastClkState2) && (currentTime - lastDebounceTime > debounceDelay)) {
+        lastDebounceTime = currentTime;
+        dtState2 = digitalRead(dtPin2);
+        if (clkState2 == HIGH && dtState2 == LOW) {
+            stepCounter2++;
+        } else if (clkState2 == HIGH && dtState2 == HIGH) {
+            stepCounter2--;
+        }
+
+        currentAngle2 = stepCounter2 * anglePerStep;
+        currentAngle2 = fmod(currentAngle2, 360.0);
+        if (currentAngle2 < 0.0) {
+            currentAngle2 += 360.0;
+        }
+
+        updateExerciseDurationFromAngle(currentAngle2);
+
+        Serial.print("Encoder 2 - Current Angle: ");
+        Serial.print(currentAngle2);
+        Serial.println("°");
+    }
+
+    if (digitalRead(swPin2) == LOW) {
+        if (buttonpressStart2 == 0) {
+            buttonpressStart2 = currentTime;
+        }
+        if (currentTime - buttonpressStart2 >= holdTimeRequired) {
+            stepCounter2 = 0;
+            currentAngle2 = 0.0;
+            Serial.println("Encoder 2 - Angle reset to 0° after holding button for 5 seconds");
+            buttonpressStart2 = 0;
+        }
+    } else {
+        buttonpressStart2 = 0;
+    }
+
+    lastClkState2 = clkState2;
+}
+
+void countMP3s() {
+  File mp3s = FileSystem.open("/mnt/sd/mp3");
+
+  if (!mp3s) {
+    Serial.println("Failed to open MP3 directory.");
+    return;
+  }
+
+  mp3s.rewindDirectory();
+  while (true) {
+    File f = mp3s.openNextFile();
+    if (f) {
+      if (String(f.name()).endsWith(".mp3") || String(f.name()).endsWith(".wav")) {
+        numOfTracks++;
+      } 
+      f.close();
+    } else {
+      break;
+    }
+
+  mp3s.close();
+  }
+}
+
+void playTrack() {
+  long randNumber = random(1, numOfTracks);
+  player.volume(volumeLevel); // REPLACE THIS VALUE WITH VARIABLE THAT IS DEPENDENT ON 2nd ENCODER 
+  player.playMp3Folder(randNumber);
 }
 
 void loop() {
+    unsigned long currentTime = millis();
 
-  // Get the current date and time from RTC
-  RTCTime timeNow;
-  RTC.getTime(timeNow);
+    updateEncoderAngle();
+    updateEncoderAngle2();
 
-  // Step 2: Check if current time is between 9 AM and 9 PM
-  if (timeNow.getHour() >= 9 && timeNow.getHour() <= 21) {
-    Serial.println("Board Active");
-    active = true;
-  } else {
-    Serial.println("Board Inactive");
-    active = false;
-    dailyExerciseCount = 0;
-    resetLEDs();
-  }
+    // Only print if the defined interval has passed
+    if (currentTime - lastPrintTime >= printInterval) {
+        updateEncoderAngle();
+        Serial.print("Current Notification Duration: ");
+        Serial.println(interval);
 
-  if (active) {
-    // Step 3: 30-minute countdown when the board is active
-    if (millis() - previousMillis >= interval) {
-      Serial.println("It's time to do your exercise!!");
-      // ADD CODE HERE FOR NOTIFYING USER IT IS TIME TO BEGIN THEIR EXERVCISE (FLASHING LIGHT)
-      LEDActivityReminder();
+        RTCTime timeNow;
+        RTC.getTime(timeNow);
 
+        if (timeNow.getHour() >= 9 && timeNow.getHour() <= 21) {
+            Serial.println("Board Active");
+            active = true;
+        } else {
+            Serial.println("Board Inactive");
+            active = false;
+            dailyExerciseCount = 0;
+            resetLEDs();
+        }
 
+        if (active) {
+            if (millis() - previousMillis >= interval) {
+                Serial.println("It's time to do your exercise!!");
+                LEDActivityReminder();
+                waitingForExercise = true;
+                waitingStartTime = millis();
+            }
 
+            if (waitingForExercise) {
+                if (millis() - waitingStartTime >= exerciseWindow) {
+                    Serial.println("Failed to perform exercise, will notify next exercise time.");
+                    waitingForExercise = false;
+                    previousMillis = millis();
+                } else {
+                    checkTilt();
+                    previousMillis = millis();
+                }
+            }
+        }
 
-      waitingForExercise = true;
-      waitingStartTime = millis();
+        if (dailyExerciseCount != prevExerciseCount) {
+            checkCompletion();
+            prevExerciseCount = dailyExerciseCount;
+        }
+
+        lastPrintTime = currentTime; // Reset the timer for the next print cycle
     }
-
-    if (waitingForExercise) {
-      if (millis() - waitingStartTime >= exerciseWindow) { //window to complete the exervise
-        Serial.println("Failed to perform exercise, will notify next exercise time.");
-        // ADD CODE HERE TO TURN OFF LIGHT THAT INDICATES ITS TIME TO EXERCISE (SEE PRINT STATEMENT ABOVE)
-
-
-
-        waitingForExercise = false;
-        previousMillis = millis();  // Reset 30-min countdown 
-      } else {
-        checkTilt();
-        previousMillis = millis();  // Reset 30-min countdown 
-      }
-    }
-  }
-
-  // ADD CODE HERE TO PRINT OUT HOW MANY LEDS SHOULD BE ON BASED ON THE VALUE OF dailyExerciseCount
-  if (dailyExerciseCount != prevExerciseCount) {
-    checkCompletion();
-    prevExerciseCount = dailyExerciseCount;
-  }
-  
-  delay(500);
 }
-
-// Lights up the number of lights according to the completed daily exercise count
 void checkCompletion() {
-  int numLEDsToLight = min(dailyExerciseCount, 6);  // Caps the number of lit LEDs to 6
+  int numLEDsToLight = min(dailyExerciseCount, 6);
   
   for (int j = 0; j < 6; j++) {
     tlc.setPWM(j, 0);
   }
 
   for (int i = 0; i < numLEDsToLight; i++) {
-    tlc.setPWM(i, 2400); // set each LED to full brightness
+    tlc.setPWM(i, 2400);
   }
 
-  tlc.write(); // Write to the TLC5947
+  tlc.write();
 }
 
 void resetLEDs() {
   Serial.println("New day. All completed tilts are reset.");
-
-  // Turn off all LEDs
   for (int i = 0; i < 6; i++) {
     tlc.setPWM(i, 0);
   }
-
-  // Turn off all LEDs
-  for (int i = 0; i <= 6; i++) {
-    tlc.setPWM(i, 0);
-  }
-
-  tlc.write(); // Write to the TLC5947
+  tlc.write();
 }
 
 void LEDActivityReminder() {
-  unsigned long flickerDuration = 10000;  // Flicker for 10 seconds
-  unsigned long flickerInterval = 500;  // Delay for 0.5 seconds between flickers
-  unsigned long startTime = millis();  // Record the start time
+  unsigned long flickerDuration = 10000;
+  unsigned long flickerInterval = 500;
+  unsigned long startTime = millis();
 
   Serial.println("Reminder: It's time to tilt again!");
 
   while (millis() - startTime < flickerDuration) {
-    // Turn on LED at index 6 to full brightness
     tlc.setPWM(6, 2400);
     tlc.write();
     delay(flickerInterval);
 
-    // Turn off LED at index 6
     tlc.setPWM(6, 0);
     tlc.write();
     delay(flickerInterval);
   }
 }
 
-// Function to play a tone of 1kHz frequency for 2 seconds
-void playSpeaker() {
-  tone(speakerPin, 1000);
-  delay(2000);
-  noTone(speakerPin);
-}
-
 void checkTilt() {
   int16_t ax, ay, az;
   mpu.getAcceleration(&ax, &ay, &az);
-  float angle = atan2(ay, az) * 180 / PI;  // Calculate tilt angle
+  float angle = atan2(ay, az) * 180 / PI;
 
-  if (abs(angle) > minTiltAngle) { // must tilt at minimum to the angle set to begin exercise
+  if (abs(angle) > minTiltAngle) {
     if (!exerciseStarted) {
-      exerciseStartTime = millis();  // Start the timer when tilt exceeds 30 degrees
+      exerciseStartTime = millis();
       Serial.println("Exercise started!");
       exerciseStarted = true;
     } else {
       Serial.print("Tilt Angle: ");
-      Serial.println(angle);  // Continuously print the angle during exercise
+      Serial.println(angle);
 
-      // Calculate the remaining time
       unsigned long elapsedTime = millis() - exerciseStartTime;
       unsigned long remainingTime = exerciseDuration - elapsedTime;
 
-      // Print the countdown timer
       Serial.print("Time remaining: ");
-      Serial.print(remainingTime / 1000);  // Convert milliseconds to seconds
+      Serial.print(remainingTime / 1000);
       Serial.println(" seconds");
 
-      if (elapsedTime >= exerciseDuration) {  // Exercise completed after 5 seconds
-        // Step 5: Completion notification
+      if (elapsedTime >= exerciseDuration) {
         dailyExerciseCount++;
         Serial.print("Good job! You did your exercise this time. Total Exercises Today: ");
         Serial.println(dailyExerciseCount);
-        // ADD CODE HERE TO PLAY SUCESS MUSIC 
-        playSpeaker();
-
-
+        playTrack();
         
-        // Step 6: Reset exercise timer for the next cycle
         exerciseStarted = false;
         waitingForExercise = false;
       }
     }
   } else {
     Serial.print("Tilt Angle: ");
-    Serial.println(angle);  // Continuously print the angle even if it's less than 30 degrees
+    Serial.println(angle);
     if (exerciseStarted) {
-      Serial.println("Went below angle threshhold.");
-      exerciseStarted = false;  // Reset if tilt is less than 30 degrees
+      Serial.println("Went below angle threshold.");
+      exerciseStarted = false;
     }
-  }}
+  }
+}
