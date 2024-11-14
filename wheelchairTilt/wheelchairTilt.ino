@@ -5,6 +5,20 @@
 #include <DFRobotDFPlayerMini.h>
 #include <SoftwareSerial.h>
 
+/*
+This Arduino code manages an exercise reminder and tracking system using tilt detection, LEDs, and sound. 
+It tracks exercise completion based on tilt angle (detected via a gyroscope) and uses rotary encoders to adjust reminder intervals and exercise duration. 
+The system provides LED feedback for progress and plays audio after each completed exercise, resetting daily.
+*/
+
+// Represents number of LED boards used
+#define NUM_TLC5947 1
+
+// Defining pins for LEDs
+#define data   4
+#define clock   5
+#define latch   6
+
 // Encoder 1 Pins       all wires that arent below are going to ground for the encoder
 const int clkPin = 3; // brown wire
 const int dtPin = 2;  // silver wire
@@ -37,24 +51,6 @@ unsigned long debounceDelay = 0.1;
 unsigned long buttonPressStart1 = 0;
 unsigned long buttonpressStart2 = 0;
 const unsigned long holdTimeRequired = 3000;
-// Represents number of LED boards used
-#define NUM_TLC5947 1
-
-// Defining pins for LEDs
-#define data   4
-#define clock   5
-#define latch   6
-
-// Define pins 8 and 9 to communicate with DFPlayer Mini
-static const uint8_t PIN_MP3_TX = 8; // Connects to the module's RX
-static const uint8_t PIN_MP3_RX = 9; // Connects to the module's TX
-SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
-
-// Create the DF player object
-DFRobotDFPlayerMini player; 
-
-// Initialize LED Driver
-Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5947, clock, data, latch);
 
 // Initialize Gyroscope
 MPU6050 mpu;
@@ -81,11 +77,20 @@ int prevExerciseCount = -1;
 unsigned long lastPrintTime = 0; 
 const unsigned long printInterval = 500;
 
-// Maximum number of tracks in the micro sd card
-long numOfTracks = 0;
-int lastTrack = 0;  // Last track played
+// --------------- LED SETUP ---------------
+Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5947, clock, data, latch);
 
-// Volume control
+// --------------- SPEAKER SETUP ---------------
+// Define pins 8 and 9 to communicate with DFPlayer Mini
+static const uint8_t PIN_MP3_TX = 8; // Connects to the module's RX
+static const uint8_t PIN_MP3_RX = 9; // Connects to the module's TX
+SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
+
+// Create the DF player object
+DFRobotDFPlayerMini player; 
+
+long numOfTracks = 0;
+int lastTrackPlayed = 0;
 long volumeLevel = 30;
 
 // Setup
@@ -97,7 +102,7 @@ void setup() {
   RTC.begin();
   tlc.begin();
 
-  // Encoder setup
+  // Encoder setup for exercise interval
   pinMode(clkPin, INPUT_PULLUP);
   pinMode(dtPin, INPUT_PULLUP);
   pinMode(swPin, INPUT_PULLUP);
@@ -251,7 +256,7 @@ void updateEncoderAngle2() {
 void playTrack() {
   long track = random(1, numOfTracks + 1);
 
-  while (track == lastTrack) {
+  while (track == lastTrackPlayed) {
     track = random(1, numOfTracks + 1);
   }
 
