@@ -4,8 +4,6 @@
 #include <Adafruit_TLC5947.h>
 #include <DFRobotDFPlayerMini.h>
 #include <SoftwareSerial.h>
-#include <Bridge.h>
-#include <FileIO.h>
 
 // Encoder 1 Pins       all wires that arent below are going to ground for the encoder
 const int clkPin = 3; // brown wire
@@ -39,11 +37,10 @@ unsigned long debounceDelay = 0.1;
 unsigned long buttonPressStart1 = 0;
 unsigned long buttonpressStart2 = 0;
 const unsigned long holdTimeRequired = 3000;
-
 // Represents number of LED boards used
 #define NUM_TLC5947 1
 
-// Defining pins
+// Defining pins for LEDs
 #define data   4
 #define clock   5
 #define latch   6
@@ -62,18 +59,15 @@ Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5947, clock, data, latch);
 // Initialize Gyroscope
 MPU6050 mpu;
 
-// Initialize variables
-int speakerPin = 9;
-
 // Timer variables
 unsigned long previousMillis = 0; 
 unsigned long exerciseStartTime = 0; 
 unsigned long waitingStartTime = 0;
 
 // Interval configuration
-long interval = 10000;  
-const long exerciseWindow = 20000; 
-unsigned long exerciseDuration = 5000;
+long interval = 5000;  
+const long exerciseWindow = 8000; 
+unsigned long exerciseDuration = 3;
 const unsigned long minTiltAngle = 15;
 
 // Status and tracking variables
@@ -89,6 +83,7 @@ const unsigned long printInterval = 500;
 
 // Maximum number of tracks in the micro sd card
 long numOfTracks = 0;
+int lastTrack = 0;  // Last track played
 
 // Volume control
 long volumeLevel = 30;
@@ -96,10 +91,8 @@ long volumeLevel = 30;
 // Setup
 void setup() {
   Serial.begin(230400);
-  softwareSerial.begin(9600);
+  softwareSerial.begin(9600); 
   delay(1000);
-  FileSystem.begin();
-  Bridge.begin();
   Wire.begin();
   RTC.begin();
   tlc.begin();
@@ -135,8 +128,6 @@ void setup() {
   int testSecond = testtime.substring(6, 8).toInt();
   RTCTime startTime(10, Month::NOVEMBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
   RTC.setTime(startTime);
-
-  countMP3s();
   randomSeed(millis());  // Generate a random seed to help randomly choose track from sd card
 }
 
@@ -257,34 +248,15 @@ void updateEncoderAngle2() {
     lastClkState2 = clkState2;
 }
 
-void countMP3s() {
-  File mp3s = FileSystem.open("/mnt/sd/mp3");
-
-  if (!mp3s) {
-    Serial.println("Failed to open MP3 directory.");
-    return;
-  }
-
-  mp3s.rewindDirectory();
-  while (true) {
-    File f = mp3s.openNextFile();
-    if (f) {
-      if (String(f.name()).endsWith(".mp3") || String(f.name()).endsWith(".wav")) {
-        numOfTracks++;
-      } 
-      f.close();
-    } else {
-      break;
-    }
-
-  mp3s.close();
-  }
-}
-
 void playTrack() {
-  long randNumber = random(1, numOfTracks);
-  player.volume(volumeLevel); // REPLACE THIS VALUE WITH VARIABLE THAT IS DEPENDENT ON 2nd ENCODER 
-  player.playMp3Folder(randNumber);
+  long track = random(1, numOfTracks + 1);
+
+  while (track == lastTrack) {
+    track = random(1, numOfTracks + 1);
+  }
+
+  player.volume(volumeLevel); // controls volume level
+  player.playMp3Folder(track);
 }
 
 void loop() {
