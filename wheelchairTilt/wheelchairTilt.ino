@@ -11,6 +11,8 @@ It tracks exercise completion based on tilt angle (detected via a gyroscope) and
 The system provides LED feedback for progress and plays audio after each completed exercise, resetting daily.
 */
 
+
+// --------------- Pin Setup  ---------------
 // Represents number of LED boards used
 #define NUM_TLC5947 1
 
@@ -28,6 +30,59 @@ const int swPin = 7;  // black wire
 const int clkPin2 = 12; // pink wire
 const int dtPin2 = 11;  // blue wire
 const int swPin2 = 10;  // black wire
+
+
+
+// --------------- Configurable Variables  ---------------
+
+// Interval controls how often it notifes them, it has 3 levels which are toggled by the rotary encoder
+long level1 = 5000;
+long level2 = 10000;
+long level3 = 15000;
+long interval = level1; // initialize it to level 1
+
+// How long they need to hold the tilt to get a succesful completion of exercise,  it also has 3 levels controlled by the other rotary encoder
+int duration1 = 3000;
+int duration2 = 4000;
+int duration3 = 5000;
+int exerciseDuration = duration1; // initialze it to level 1
+
+const long exerciseWindow = 8000; // The window of time they have to do the exercise
+const unsigned long minTiltAngle = 15; // Minimum angle they need to tilt to in order to begin exercise
+const int dayOfMonth = 14; // Configures day of the month for rtc (not super important but you should update when uploading to project)
+
+// --------------- Gyroscope SETUP ---------------
+
+/* For the gyroscope the wiring is as follows:
+VCC: 5V
+GND: GND
+SCL: A5
+SDA: A4
+*/
+
+MPU6050 mpu;
+
+
+// --------------- Timing Varibles SETUP ---------------
+
+// Timer variables
+unsigned long previousMillis = 0; 
+unsigned long exerciseStartTime = 0; 
+unsigned long waitingStartTime = 0;
+
+// Status and tracking variables
+bool active = false; 
+bool exerciseStarted = false;
+bool waitingForExercise = false;
+int dailyExerciseCount = 0;
+int prevExerciseCount = -1;
+
+// Purely for debugging purposes and result readability (youll notice all print statements print condtionally based on these variables)
+unsigned long lastPrintTime = 0; 
+const unsigned long printInterval = 500; // You can change this in order to increase or decrease the rate at which serial monitor prints out stuff to read
+
+
+// --------------- Encoder SETUP ---------------
 
 // Encoder Constants
 int clkState, dtState;
@@ -52,30 +107,6 @@ unsigned long buttonPressStart1 = 0;
 unsigned long buttonpressStart2 = 0;
 const unsigned long holdTimeRequired = 3000;
 
-// Initialize Gyroscope
-MPU6050 mpu;
-
-// Timer variables
-unsigned long previousMillis = 0; 
-unsigned long exerciseStartTime = 0; 
-unsigned long waitingStartTime = 0;
-
-// Interval configuration
-long interval = 5000;  
-const long exerciseWindow = 8000; 
-unsigned long exerciseDuration = 3;
-const unsigned long minTiltAngle = 15;
-
-// Status and tracking variables
-bool active = false; 
-bool exerciseStarted = false;
-bool waitingForExercise = false;
-int dailyExerciseCount = 0;
-int prevExerciseCount = -1;
-
-// Purely for debugging purposes and result readability
-unsigned long lastPrintTime = 0; 
-const unsigned long printInterval = 500;
 
 // --------------- LED SETUP ---------------
 Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5947, clock, data, latch);
@@ -93,7 +124,9 @@ long numOfTracks = 0;
 int lastTrackPlayed = 0;
 long volumeLevel = 30;
 
-// Setup
+
+
+// --------------- Begining of SETUP CODE ---------------
 void setup() {
   Serial.begin(230400);
   softwareSerial.begin(9600); 
@@ -131,7 +164,7 @@ void setup() {
   int testHour = testtime.substring(0, 2).toInt();
   int testMinute = testtime.substring(3, 5).toInt();
   int testSecond = testtime.substring(6, 8).toInt();
-  RTCTime startTime(10, Month::NOVEMBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
+  RTCTime startTime(dayOfMonth, Month::NOVEMBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
   RTC.setTime(startTime);
   randomSeed(millis());  // Generate a random seed to help randomly choose track from sd card
 }
@@ -140,22 +173,22 @@ void setup() {
 // Function to update interval based on angle
 void updateIntervalFromAngle(float angle) {
     if (angle >= 0 && angle < 120) {
-        interval = 11000;
+        interval = level1;
     } else if (angle >= 120 && angle < 240) {
-        interval = 12000;
+        interval = level2;
     } else if (angle >= 240 && angle <= 360) {
-        interval = 13000;
+        interval = level3;
     }
 }
 
 // Function to update exercise duration based on angle from second encoder
 void updateExerciseDurationFromAngle(float angle) {
     if (angle >= 0 && angle < 120) {
-        exerciseDuration = 4000;
+        exerciseDuration = duration1;
     } else if (angle >= 120 && angle < 240) {
-        exerciseDuration = 5000;
+        exerciseDuration = duration2;
     } else if (angle >= 240 && angle <= 360) {
-        exerciseDuration = 6000;
+        exerciseDuration = duration3;
     }
 }
 
