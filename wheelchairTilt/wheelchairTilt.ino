@@ -61,7 +61,12 @@ SDA: A4
 */
 
 MPU6050 mpu;
-
+float offset; // angle offset
+const int calibrationButtonPin = 13; // connect one side of the button to this pin and the other to GND
+  // Check for button press
+  static bool gyroButtonPressed = false;
+  static unsigned long gyroLastDebounceTime = 0;
+  const unsigned long gyroDebounceDelay = 50; // 50ms debounce delay
 
 // --------------- Timing Varibles SETUP ---------------
 
@@ -120,8 +125,6 @@ SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
 // Create the DF player object
 DFRobotDFPlayerMini player; 
 
-long numOfTracks = 0;
-int lastTrackPlayed = 0;
 long volumeLevel = 30;
 
 
@@ -147,6 +150,8 @@ void setup() {
   pinMode(swPin2, INPUT_PULLUP);
   lastClkState2 = digitalRead(clkPin2);
 
+  // Gryoscope related stuff
+  pinMode(calibrationButtonPin, INPUT_PULLUP);
   mpu.initialize();
   if (mpu.testConnection()) {
     Serial.println("MPU6050 connection successful");
@@ -154,6 +159,7 @@ void setup() {
     Serial.println("MPU6050 connection failed");
   }
 
+  // SPeaker related stuff
   if (player.begin(softwareSerial)) {
     Serial.println("Serial connection with DFPlayer established.");
   } else {
@@ -166,7 +172,8 @@ void setup() {
   int testSecond = testtime.substring(6, 8).toInt();
   RTCTime startTime(dayOfMonth, Month::NOVEMBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
   RTC.setTime(startTime);
-  randomSeed(millis());  // Generate a random seed to help randomly choose track from sd card
+  
+  offset = calculateGyroOffset();
 }
 
 
@@ -294,14 +301,17 @@ void playTrack() {
   }
 
   player.volume(volumeLevel); // controls volume level
-  player.playMp3Folder(track);
+  player.playMp3Folder(track); // all we need ot play a track
 }
 
 void loop() {
-    unsigned long currentTime = millis();
 
-    updateEncoderAngle();
-    updateEncoderAngle2();
+  handleGyroRecalibration(); // checks if the calibration button has been pressed
+
+  unsigned long currentTime = millis();
+
+  updateEncoderAngle();
+  updateEncoderAngle2();
 
     // Only print if the defined interval has passed
     if (currentTime - lastPrintTime >= printInterval) {
@@ -395,6 +405,7 @@ void checkTilt() {
   mpu.getAcceleration(&ax, &ay, &az);
   float angle = atan2(ay, az) * 180 / PI;
 
+  angle = angle - offset;
   if (abs(angle) > minTiltAngle) {
     if (!exerciseStarted) {
       exerciseStartTime = millis();
@@ -428,5 +439,55 @@ void checkTilt() {
       Serial.println("Went below angle threshold.");
       exerciseStarted = false;
     }
+  }
+}
+
+float calculateGyroOffset() {
+  int16_t ax, ay, az;
+  float totalAngle = 0;
+  const unsigned long offsetDuration = 5000; // 5 seconds
+  unsigned long startTime = millis();
+  int sampleCount = 0;
+
+  while (millis() - startTime < offsetDuration) {
+    // Read accelerometer data
+    mpu.getAcceleration(&ax, &ay, &az);
+
+    // Calculate angle from accelerometer data
+    float angle = atan2(ay, az) * 180 / PI;
+
+    // Accumulate angle and count samples
+    totalAngle += angle;
+    sampleCount++;
+
+    // Small delay for stability (adjust as needed for smoother readings)
+    delay(10);
+  }
+
+  // Calculate the average angle
+  float offset = totalAngle / sampleCount;
+  Serial.print("Calculated Gyro Offset: ");
+  Serial.println(offset);
+
+  return offset;
+}
+
+void handleGyroRecalibration() {
+  int gyroButtonState = digitalRead(calibrationButtonPin);
+  
+  if (gyroButtonState == LOW && !gyroButtonPressed) {
+    // Button press detected
+    unsigned long currentTime = millis();
+    if (currentTime - gyroLastDebounceTime > gyroDebounceDelay) {
+      gyroButtonPressed = true;
+      gyroLastDebounceTime = currentTime;
+
+      // Recalibrate gyroscope offset
+      Serial.println("Recalibrating gyroscope...");
+      offset = calculateGyroOffset();
+      Serial.println("Recalibration complete.");
+    }
+  } else if (gyroButtonState == HIGH) {
+    gyroButtonPressed = false; // Reset button pressed state when button is released
   }
 }
