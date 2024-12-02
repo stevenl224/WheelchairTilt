@@ -260,7 +260,7 @@ void updateEncoderAngle() {
     if (currentTime - buttonPressStart1 >= holdTimeRequired) {
       stepCounter = 0;
       currentAngle = 0.0;
-      Serial.println("Angle reset to 0° after holding button for 3 seconds");
+      Serial.println("Interval Encoder Angle reset to 0° after holding button for 3 seconds");
       buttonPressStart1 = 0;  // Reset the press start time after reset action
     }
   } else {
@@ -306,7 +306,7 @@ void updateEncoderAngle2() {
     if (currentTime - buttonpressStart2 >= holdTimeRequired) {
       stepCounter2 = 0;
       currentAngle2 = 0.0;
-      Serial.println("Encoder 2 - Angle reset to 0° after holding button for 5 seconds");
+      Serial.println("Duration Encoder Angle reset to 0° after holding button for 3 seconds");
       buttonpressStart2 = 0;
     }
   } else {
