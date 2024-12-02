@@ -46,12 +46,20 @@ const int MILLISECONDS = 60 * 1000;
 long level1 = 30 * MILLISECONDS;
 long level2 = 45 * MILLISECONDS;
 long level3 = 60 * MILLISECONDS;
+// Demo Purposes
+// long level1 = 2 * MILLISECONDS;
+// long level2 = 3 * MILLISECONDS;
+// long level3 = 4 * MILLISECONDS;
 long interval = level1;  // initialize it to level 1
 
 // How long they need to hold the tilt to get a succesful completion of exercise,  it also has 3 levels controlled by the other rotary encoder
 int duration1 = 3 * MILLISECONDS;
 int duration2 = 4 * MILLISECONDS;
 int duration3 = 5 * MILLISECONDS;
+// Demo Purposes
+// int duration1 = 1 * MILLISECONDS;
+// int duration2 = 2 * MILLISECONDS;
+// int duration3 = 3 * MILLISECONDS;
 int exerciseDuration = duration1;  // initialze it to level 1
 
 long exerciseWindow = interval;       // The window of time they have to do the exercise
@@ -91,9 +99,7 @@ int dailyExerciseCount = 0;
 int prevExerciseCount = -1;
 
 // Purely for debugging purposes and result readability (youll notice all print statements print condtionally based on these variables)
-unsigned long lastPrintTime = 0;
-const unsigned long printInterval = 500;  // You can change this in order to increase or decrease the rate at which serial monitor prints out stuff to read
-
+const unsigned long printInterval = 15000;  // You can change this in order to increase or decrease the rate at which serial monitor prints out stuff to read
 
 // --------------- Encoder SETUP ---------------
 
@@ -241,6 +247,9 @@ void updateEncoderAngle() {
     Serial.print(" | Current Angle: ");
     Serial.print(currentAngle);
     Serial.println("°");
+    Serial.print("Current Notifcation Interval: ");
+    Serial.print(convertMSToMinutes(interval));
+    Serial.println(" minutes.");
   }
 
   // Button press reset handling with dedicated timing
@@ -285,6 +294,9 @@ void updateEncoderAngle2() {
     Serial.print("Encoder 2 - Current Angle: ");
     Serial.print(currentAngle2);
     Serial.println("°");
+    Serial.print("Current Exercise Tilt Duration: ");
+    Serial.print(convertMSToMinutes(exerciseDuration));
+    Serial.println(" minutes.");
   }
 
   if (digitalRead(swPin2) == LOW) {
@@ -302,6 +314,15 @@ void updateEncoderAngle2() {
   }
 
   lastClkState2 = clkState2;
+}
+
+template <typename T>
+T convertMSToMinutes(T timeInMS) {
+  // Perform the conversion
+  T minutes = timeInMS / MILLISECONDS;
+  
+  // Return the result
+  return minutes;
 }
 
 void playTrack(int track, int volumeLevel) {
@@ -334,69 +355,70 @@ void loop() {
   updateEncoderAngle();
   updateEncoderAngle2();
 
-  // Only print if the defined interval has passed
-  if (currentTime - lastPrintTime >= printInterval) {
-    updateEncoderAngle();
-    Serial.print("Current Notification Duration: ");
-    Serial.println(interval);
+  RTCTime timeNow;
+  RTC.getTime(timeNow);
 
-    RTCTime timeNow;
-    RTC.getTime(timeNow);
-
-    if (timeNow.getHour() >= STARTING_HOUR && timeNow.getHour() <= ENDING_HOUR) {
+  if (timeNow.getHour() >= STARTING_HOUR && timeNow.getHour() <= ENDING_HOUR) {
+    if ((millis() - previousMillis) % printInterval == 0) {
       Serial.println("Board Active");
-      active = true;
-    } else {
-      Serial.println("Board Inactive");
-      active = false;
-      dailyExerciseCount = 0;
-      resetLEDs();
+      Serial.print("Current Notification Interval: ");
+      Serial.print(convertMSToMinutes(interval));
+      Serial.println(" minutes.");
+      Serial.print("Current Tilting Duration: ");
+      Serial.print(convertMSToMinutes(exerciseDuration));
+      Serial.println(" minutes.");
+    }
+    
+    active = true;
+  } else {
+    Serial.println("Board Inactive");
+    active = false;
+    dailyExerciseCount = 0;
+    resetLEDs();
+  }
+
+  if (active) {
+    if (millis() - previousMillis >= interval) {
+      Serial.println("It's time to do your exercise!!"); 
+      informUser();
+      LEDActivityReminder();
+      waitingForExercise = true;
+      waitingStartTime = millis();
     }
 
-    if (active) {
-      if (millis() - previousMillis >= interval) {
-        Serial.println("It's time to do your exercise!!");
-        informUser();
-        LEDActivityReminder();
-        waitingForExercise = true;
-        waitingStartTime = millis();
-      }
-
-      if (waitingForExercise) {
-        if (millis() - waitingStartTime >= reminderDuration) {
-          if (!reminderPlayed) {
-            playTrack(6, 15);  // Play reminder sound track
-            reminderPlayed = true;
-          }
+    if (waitingForExercise) {
+      if (millis() - waitingStartTime >= reminderDuration) {
+        if (!reminderPlayed) {
+          playTrack(6, 15);  // Play reminder sound track
+          reminderPlayed = true;
         }
-        
-        if (millis() - waitingStartTime >= exerciseWindow) {
-          if (exerciseStarted) {
-            Serial.println("The user's tilting is still in progress");
-            checkTilt();
-            previousMillis = millis();
-          } else {
-            Serial.println("Failed to perform exercise, will notify next exercise time.");
-            playTrack(2, 15);  // Play exercise missed sound track
-
-            waitingForExercise = false;
-            reminderPlayed = false;
-            previousMillis = millis();
-          }
-        } else {
+      }
+      
+      if (millis() - waitingStartTime >= exerciseWindow) {
+        if (exerciseStarted) {
+          Serial.println("The user's tilting is still in progress");
           checkTilt();
           previousMillis = millis();
+        } else {
+          Serial.println("Failed to perform exercise, will notify next exercise time.");
+          playTrack(2, 15);  // Play exercise missed sound track
+
+          waitingForExercise = false;
+          reminderPlayed = false;
+          previousMillis = millis();
         }
+      } else {
+        checkTilt();
+        previousMillis = millis();
       }
     }
-
-    if (dailyExerciseCount != prevExerciseCount) {
-      checkCompletion();
-      prevExerciseCount = dailyExerciseCount;
-    }
-
-    lastPrintTime = currentTime;  // Reset the timer for the next print cycle
   }
+
+  if (dailyExerciseCount != prevExerciseCount) {
+    checkCompletion();
+    prevExerciseCount = dailyExerciseCount;
+  }
+
 }
 void checkCompletion() {
   int numLEDsToLight = min(dailyExerciseCount, 6);
