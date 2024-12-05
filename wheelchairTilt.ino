@@ -423,8 +423,6 @@ void loop() {
       Serial.print("Current Tilting Duration: ");
       Serial.print(convertMSToMinutes(exerciseDuration));
       Serial.println(" minutes.");
-
-      Serial.println(digitalRead(muteButtonPin));
     }
 
     active = true;
