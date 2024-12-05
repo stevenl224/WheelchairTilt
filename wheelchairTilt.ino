@@ -42,7 +42,7 @@ const static int ENDING_HOUR = 21;
 // Interval controls how often it notifes them, it has 3 levels which are toggled by the rotary encoder
 // Define length of each interval based on this format to convert the desired time in minutes to ms
 // level = (minutes) * MILLISECONDS
-const int MILLISECONDS = 60 * 1000; 
+const int MILLISECONDS = 60 * 1000;
 long level1 = 30 * MILLISECONDS;
 long level2 = 45 * MILLISECONDS;
 long level3 = 60 * MILLISECONDS;
@@ -62,10 +62,10 @@ int duration3 = 5 * MILLISECONDS;
 // int duration3 = 3 * MILLISECONDS;
 int exerciseDuration = duration1;  // initialze it to level 1
 
-long exerciseWindow = interval;       // The window of time they have to do the exercise
-const unsigned long minTiltAngle = 15;  // Minimum angle they need to tilt to in order to begin exercise
-const int dayOfMonth = 2;              // Configures day of the month for rtc (not super important but you should update when uploading to project)
-int reminderDuration = 1 * MILLISECONDS;           // Once exercise begins it reminds them they should be tilting after this much of a delay
+long exerciseWindow = interval;           // The window of time they have to do the exercise
+const unsigned long minTiltAngle = 15;    // Minimum angle they need to tilt to in order to begin exercise
+const int dayOfMonth = 2;                 // Configures day of the month for rtc (not super important but you should update when uploading to project)
+int reminderDuration = 1 * MILLISECONDS;  // Once exercise begins it reminds them they should be tilting after this much of a delay
 
 // --------------- Gyroscope SETUP ---------------
 
@@ -77,12 +77,14 @@ SDA: A4
 */
 
 MPU6050 mpu;
-float offset;                         // angle offset
-const int calibrationButtonPin = 13;  // connect one side of the button to this pin and the other to GND
+float offset;                  // angle offset
+const int muteButtonPin = 13;  // connect one side of the button to this pin and the other to GND
 // Check for button press
-static bool gyroButtonPressed = false;
-static unsigned long gyroLastDebounceTime = 0;
-const unsigned long gyroDebounceDelay = 50;  // 50ms debounce delay
+int muteButtonState = HIGH;              // Current button state
+int muteLastButtonState = HIGH;          // Previous button state
+static bool muteButtonPressed = true;  // whether the button is currently pressed
+static unsigned long muteLastDebounceTime = 0;
+const unsigned long muteDebounceDelay = 50;  // 50ms debounce delay
 
 // --------------- Timing Varibles SETUP ---------------
 
@@ -123,7 +125,7 @@ unsigned long debounceDelay = 0.1;
 
 // Button hold timing variables
 unsigned long buttonPressStart1 = 0;
-unsigned long buttonpressStart2 = 0;
+unsigned long buttonPressStart2 = 0;
 const unsigned long holdTimeRequired = 3000;
 
 
@@ -139,14 +141,32 @@ SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
 // Create the DF player object
 DFRobotDFPlayerMini player;
 
+int volume = 18;
 bool reminderPlayed = false;
 
-// 1 = Success Sound
-// 2 = Exercise Missed
-// 3 = Its time to tilt (Tier 1) -> 3 minutes
-// 4 = Its time to tilt (Tier 2) -> 4 minutes
-// 5 = Its time to tilt (tier 3) -> 5 minutes
-// 6 = Reminder to tilt 1 min into the window time
+/*
+Below is the list of audio tracks in the SD card.
+To add additional sounds, add mp3 or wav files named with four digits in the mp3 folder
+i.e. I want to add the 15th track --> name file "0015"
+
+These files can then be played using playTrack(desired file)
+
+Current Tracks:
+  1 = Success Sound
+  2 = Exercise Missed
+  3 = Its time to tilt (Tier 1) -> 3 minutes
+  4 = Its time to tilt (Tier 2) -> 4 minutes
+  5 = Its time to tilt (tier 3) -> 5 minutes
+  6 = Reminder to tilt 1 min into the window time
+  7 = Tilt Reminders disabled
+  8 = Tilt Reminders enabled
+  9 = Recalibrating Gyroscope
+  10 = Reset Duration Angle
+  11 = Reset Interval Angle
+  12 = Device Rebooting
+  13 = Tilt Threshold Passed, Timer Begins
+  14 = Reminder to Tilt Further Back
+*/
 
 // --------------- Begining of SETUP CODE ---------------
 void setup() {
@@ -170,7 +190,7 @@ void setup() {
   lastClkState2 = digitalRead(clkPin2);
 
   // Gryoscope related stuff
-  pinMode(calibrationButtonPin, INPUT_PULLUP);
+  pinMode(muteButtonPin, INPUT_PULLUP);
   mpu.initialize();
   if (mpu.testConnection()) {
     Serial.println("MPU6050 connection successful");
@@ -185,6 +205,8 @@ void setup() {
     Serial.println("Connecting to DFPlayer Mini failed!");
   }
 
+  playTrack(12, volume);  // Play on setup to ensure initial positions of buttons are properly set
+
   String testtime = __TIME__;
   int testHour = testtime.substring(0, 2).toInt();
   int testMinute = testtime.substring(3, 5).toInt();
@@ -193,6 +215,7 @@ void setup() {
   RTC.setTime(startTime);
 
   offset = calculateGyroOffset();
+  delay(1000);
 }
 
 
@@ -252,21 +275,6 @@ void updateEncoderAngle() {
     Serial.println(" minutes.");
   }
 
-  // Button press reset handling with dedicated timing
-  if (digitalRead(swPin) == LOW) {
-    if (buttonPressStart1 == 0) {
-      buttonPressStart1 = currentTime;  // Record start time if button is pressed
-    }
-    if (currentTime - buttonPressStart1 >= holdTimeRequired) {
-      stepCounter = 0;
-      currentAngle = 0.0;
-      Serial.println("Interval Encoder Angle reset to 0° after holding button for 3 seconds");
-      buttonPressStart1 = 0;  // Reset the press start time after reset action
-    }
-  } else {
-    buttonPressStart1 = 0;  // Reset timing if button is not held
-  }
-
   lastClkState = clkState;
 }
 
@@ -299,28 +307,14 @@ void updateEncoderAngle2() {
     Serial.println(" minutes.");
   }
 
-  if (digitalRead(swPin2) == LOW) {
-    if (buttonpressStart2 == 0) {
-      buttonpressStart2 = currentTime;
-    }
-    if (currentTime - buttonpressStart2 >= holdTimeRequired) {
-      stepCounter2 = 0;
-      currentAngle2 = 0.0;
-      Serial.println("Duration Encoder Angle reset to 0° after holding button for 3 seconds");
-      buttonpressStart2 = 0;
-    }
-  } else {
-    buttonpressStart2 = 0;
-  }
-
   lastClkState2 = clkState2;
 }
 
-template <typename T>
+template<typename T>
 T convertMSToMinutes(T timeInMS) {
   // Perform the conversion
   T minutes = timeInMS / MILLISECONDS;
-  
+
   // Return the result
   return minutes;
 }
@@ -334,24 +328,86 @@ void informUser() {
   if (exerciseDuration == duration1) {
     Serial.println("User is tilting for duration1: ");
     Serial.print(duration1);
-    playTrack(3, 15);
+    playTrack(3, volume);
   } else if (exerciseDuration == duration2) {
     Serial.println("User is tilting for duration2: ");
     Serial.println(duration2);
-    playTrack(4, 15);
+    playTrack(4, volume);
   } else if (exerciseDuration == duration3) {
     Serial.println("User is tilting for duration3: ");
     Serial.println(duration3);
-    playTrack(5, 15);
+    playTrack(5, volume);
+  }
+
+  delay(1000);
+  playTrack(14, volume);
+}
+
+// Handles button presses for the duration and interval encoders:
+// Press both: reset gyro calibration
+// Hold Duration Button for 3 seconds to reset encoder reference angle/point to zero
+// Hold Interval Button for 3 seconds to reset encoder reference angle/point to zero
+void checkDurationAndIntervalPresses() {
+  unsigned long currentTime = millis();
+
+  // Read button states
+  int durationBtn = digitalRead(swPin);   // Button 1
+  int intervalBtn = digitalRead(swPin2);  // Button 2
+
+  // Check if both buttons are pressed simultaneously
+  if (durationBtn == LOW && intervalBtn == LOW) {
+    if (buttonPressStart1 == 0 && buttonPressStart2 == 0) {
+      buttonPressStart1 = currentTime;
+      buttonPressStart2 = currentTime;
+    }
+    // Perform quick action for both buttons pressed
+    Serial.println("Both buttons pressed: Resetting gyro calibration");
+    playTrack(9, volume);
+    calculateGyroOffset();
+    buttonPressStart1 = 0;  // Reset timing
+    buttonPressStart2 = 0;
+    return;
+  }
+
+  // Hold button down for 3 seconds to reset duration angle reference
+  if (durationBtn == LOW) {
+    if (buttonPressStart1 == 0) {
+      buttonPressStart1 = currentTime;  // Record start time if button is pressed
+    }
+    if (currentTime - buttonPressStart1 >= holdTimeRequired) {
+      stepCounter = 0;
+      currentAngle = 0.0;
+      playTrack(10, volume);
+      Serial.println("Interval Encoder Angle reset to 0° after holding button for 3 seconds");
+      buttonPressStart1 = 0;  // Reset the press start time after reset action
+    }
+  } else {
+    buttonPressStart1 = 0;  // Reset timing if button is not held
+  }
+
+  // Hold button down for 3 seconds to reset interval angle reference
+  if (intervalBtn == LOW) {
+    if (buttonPressStart2 == 0) {
+      buttonPressStart2 = currentTime;
+    }
+    if (currentTime - buttonPressStart2 >= holdTimeRequired) {
+      stepCounter2 = 0;
+      currentAngle2 = 0.0;
+      playTrack(11, volume);
+      Serial.println("Duration Encoder Angle reset to 0° after holding button for 3 seconds");
+      buttonPressStart2 = 0;
+    }
+  } else {
+    buttonPressStart2 = 0;
   }
 }
 
-
 void loop() {
-  handleGyroRecalibration();  // checks if the calibration button has been pressed
+  muteNotifications();  // checks if sound is to be toggled (on/off)
 
   unsigned long currentTime = millis();
 
+  checkDurationAndIntervalPresses();
   updateEncoderAngle();
   updateEncoderAngle2();
 
@@ -367,19 +423,22 @@ void loop() {
       Serial.print("Current Tilting Duration: ");
       Serial.print(convertMSToMinutes(exerciseDuration));
       Serial.println(" minutes.");
+
+      Serial.println(digitalRead(muteButtonPin));
     }
-    
+
     active = true;
   } else {
     Serial.println("Board Inactive");
     active = false;
+    volume = 18;
     dailyExerciseCount = 0;
     resetLEDs();
   }
 
   if (active) {
     if (millis() - previousMillis >= interval) {
-      Serial.println("It's time to do your exercise!!"); 
+      Serial.println("It's time to do your exercise!!");
       informUser();
       LEDActivityReminder();
       waitingForExercise = true;
@@ -389,11 +448,11 @@ void loop() {
     if (waitingForExercise) {
       if (millis() - waitingStartTime >= reminderDuration) {
         if (!reminderPlayed) {
-          playTrack(6, 15);  // Play reminder sound track
+          playTrack(6, volume);  // Play reminder sound track
           reminderPlayed = true;
         }
       }
-      
+
       if (millis() - waitingStartTime >= exerciseWindow) {
         if (exerciseStarted) {
           Serial.println("The user's tilting is still in progress");
@@ -401,7 +460,7 @@ void loop() {
           previousMillis = millis();
         } else {
           Serial.println("Failed to perform exercise, will notify next exercise time.");
-          playTrack(2, 15);  // Play exercise missed sound track
+          playTrack(2, volume);  // Play exercise missed sound track
 
           waitingForExercise = false;
           reminderPlayed = false;
@@ -418,7 +477,6 @@ void loop() {
     checkCompletion();
     prevExerciseCount = dailyExerciseCount;
   }
-
 }
 void checkCompletion() {
   int numLEDsToLight = min(dailyExerciseCount, 6);
@@ -470,6 +528,7 @@ void checkTilt() {
     if (!exerciseStarted) {
       exerciseStartTime = millis();
       Serial.println("Exercise started!");
+      playTrack(13, volume);
       exerciseStarted = true;
     } else {
       Serial.print("Tilt Angle: ");
@@ -486,7 +545,7 @@ void checkTilt() {
         dailyExerciseCount++;
         Serial.print("Good job! You did your exercise this time. Total Exercises Today: ");
         Serial.println(dailyExerciseCount);
-        playTrack(1, 15);  // Play exericse success sound track
+        playTrack(1, volume);  // Play exericse success sound track
 
         reminderPlayed = false;
         exerciseStarted = false;
@@ -534,22 +593,42 @@ float calculateGyroOffset() {
   return offset;
 }
 
-void handleGyroRecalibration() {
-  int gyroButtonState = digitalRead(calibrationButtonPin);
+void muteNotifications() {
+  // Read the current state of the mute button
+  muteButtonState = digitalRead(muteButtonPin);
 
-  if (gyroButtonState == LOW && !gyroButtonPressed) {
-    // Button press detected
-    unsigned long currentTime = millis();
-    if (currentTime - gyroLastDebounceTime > gyroDebounceDelay) {
-      gyroButtonPressed = true;
-      gyroLastDebounceTime = currentTime;
+  // Get the current time
+  unsigned long currentTime = millis();
 
-      // Recalibrate gyroscope offset
-      Serial.println("Recalibrating gyroscope...");
-      offset = calculateGyroOffset();
-      Serial.println("Recalibration complete.");
-    }
-  } else if (gyroButtonState == HIGH) {
-    gyroButtonPressed = false;  // Reset button pressed state when button is released
+  // Check if the button state has changed
+  if (muteButtonState != muteLastButtonState) {
+    muteLastDebounceTime = currentTime; // Reset debounce timer
   }
+
+  // If debounce delay has elapsed, consider the state stable
+  if ((currentTime - muteLastDebounceTime) > muteDebounceDelay) {
+    // If the button is pressed (LOW) and wasn't pressed before
+    if (muteButtonState == LOW && !muteButtonPressed) {
+      muteButtonPressed = true; // Mark button as pressed
+
+      // Toggle mute state
+      if (volume != 0) {
+        Serial.println("Tilt reminders have been disabled.");
+        playTrack(7, volume);
+        volume = 0;
+      } else {
+        volume = 18; // Re-enable tilt notifications
+        Serial.println("Tilt reminders have been enabled.");
+        playTrack(8, volume);
+      }
+    }
+    // If the button is released (HIGH) and was previously pressed
+    else if (muteButtonState == HIGH && muteButtonPressed) {
+      muteButtonPressed = false; // Reset the pressed state
+    }
+  }
+
+  // Save the current button state for the next loop
+  muteLastButtonState = muteButtonState;
 }
+
