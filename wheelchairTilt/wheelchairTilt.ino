@@ -41,31 +41,31 @@ const static int ENDING_HOUR = 21;
 
 // Interval controls how often it notifes them, it has 3 levels which are toggled by the rotary encoder
 // Define length of each interval based on this format to convert the desired time in minutes to ms
-// level = (minutes) * MILLISECONDS
-const int MILLISECONDS = 60 * 1000;
-long level1 = 30 * MILLISECONDS;
-long level2 = 45 * MILLISECONDS;
-long level3 = 60 * MILLISECONDS;
-// Demo Purposes
-// long level1 = 2 * MILLISECONDS;
-// long level2 = 3 * MILLISECONDS;
-// long level3 = 4 * MILLISECONDS;
+// level = (minutes) * MINUTE
+const int MINUTE = 60 * 1000;
+long level1 = 30 * MINUTE;
+long level2 = 45 * MINUTE;
+long level3 = 60 * MINUTE;
+// // Demo Purposes
+// long level1 = 2 * MINUTE;
+// long level2 = 3 * MINUTE;
+// long level3 = 4 * MINUTE;
 long interval = level1;  // initialize it to level 1
 
 // How long they need to hold the tilt to get a succesful completion of exercise,  it also has 3 levels controlled by the other rotary encoder
-int duration1 = 3 * MILLISECONDS;
-int duration2 = 4 * MILLISECONDS;
-int duration3 = 5 * MILLISECONDS;
+int duration1 = 3 * MINUTE;
+int duration2 = 4 * MINUTE;
+int duration3 = 5 * MINUTE;
 // Demo Purposes
-// int duration1 = 1 * MILLISECONDS;
-// int duration2 = 2 * MILLISECONDS;
-// int duration3 = 3 * MILLISECONDS;
+// int duration1 = 1 * MINUTE;
+// int duration2 = 2 * MINUTE;
+// int duration3 = 3 * MINUTE;
 int exerciseDuration = duration1;  // initialze it to level 1
 
 long exerciseWindow = interval;           // The window of time they have to do the exercise
 const unsigned long minTiltAngle = 15;    // Minimum angle they need to tilt to in order to begin exercise
 const int dayOfMonth = 2;                 // Configures day of the month for rtc (not super important but you should update when uploading to project)
-int reminderDuration = 1 * MILLISECONDS;  // Once exercise begins it reminds them they should be tilting after this much of a delay
+int reminderDuration = 1 * MINUTE;  // Once exercise begins it reminds them they should be tilting after this much of a delay
 
 // --------------- Gyroscope SETUP ---------------
 
@@ -77,7 +77,7 @@ SDA: A4
 */
 
 MPU6050 mpu;
-float offset;                  // angle offset
+float offset;  // angle offset
 
 
 // --------------- Timing Varibles SETUP ---------------
@@ -140,8 +140,8 @@ bool reminderPlayed = false;
 
 const int muteButtonPin = 13;  // connect one side of the button to this pin and the other to GND
 // Check for button press
-int muteButtonState = HIGH;              // Current button state
-int muteLastButtonState = HIGH;          // Previous button state
+int muteButtonState = HIGH;            // Current button state
+int muteLastButtonState = HIGH;        // Previous button state
 static bool muteButtonPressed = true;  // whether the button is currently pressed
 static unsigned long muteLastDebounceTime = 0;
 const unsigned long muteDebounceDelay = 50;  // 50ms debounce delay
@@ -200,7 +200,7 @@ void setup() {
     Serial.println("MPU6050 connection failed");
   }
 
-  // SPeaker related stuff
+  // Speaker related stuff
   if (player.begin(softwareSerial)) {
     Serial.println("Serial connection with DFPlayer established.");
   } else {
@@ -315,7 +315,7 @@ void updateEncoderAngle2() {
 template<typename T>
 T convertMSToMinutes(T timeInMS) {
   // Perform the conversion
-  T minutes = timeInMS / MILLISECONDS;
+  T minutes = timeInMS / MINUTE;
 
   // Return the result
   return minutes;
@@ -342,7 +342,6 @@ void informUser() {
   }
 
   delay(1000);
-  playTrack(14, volume);
 }
 
 // Handles button presses for the duration and interval encoders:
@@ -407,6 +406,7 @@ void checkDurationAndIntervalPresses() {
 void loop() {
   muteNotifications();  // checks if sound is to be toggled (on/off)
 
+  unsigned long lastPrintMillis = 0;
   unsigned long currentTime = millis();
 
   checkDurationAndIntervalPresses();
@@ -416,8 +416,11 @@ void loop() {
   RTCTime timeNow;
   RTC.getTime(timeNow);
 
+
   if (timeNow.getHour() >= STARTING_HOUR && timeNow.getHour() <= ENDING_HOUR) {
-    if ((millis() - previousMillis) % printInterval == 0) {
+    unsigned long currentMillis = millis();
+
+    if ((currentMillis - lastPrintMillis) % printInterval == 0) {
       Serial.println("Board Active");
       Serial.print("Current Notification Interval: ");
       Serial.print(convertMSToMinutes(interval));
@@ -425,6 +428,8 @@ void loop() {
       Serial.print("Current Tilting Duration: ");
       Serial.print(convertMSToMinutes(exerciseDuration));
       Serial.println(" minutes.");
+
+      lastPrintMillis = currentMillis;
     }
 
     active = true;
@@ -447,7 +452,7 @@ void loop() {
 
     if (waitingForExercise) {
       if (millis() - waitingStartTime >= reminderDuration) {
-        if (!reminderPlayed) {
+        if (!reminderPlayed && !exerciseStarted) {
           playTrack(6, volume);  // Play reminder sound track
           reminderPlayed = true;
         }
@@ -507,45 +512,64 @@ void LEDActivityReminder() {
 
   Serial.println("Reminder: It's time to tilt again!");
 
-  while (millis() - startTime < flickerDuration) {
-    tlc.setPWM(6, 1000);
-    tlc.write();
-    delay(flickerInterval);
+  if (volume != 0) {
+    while (millis() - startTime < flickerDuration) {
+      tlc.setPWM(6, 1000);
+      tlc.write();
+      delay(flickerInterval);
 
-    tlc.setPWM(6, 0);
-    tlc.write();
-    delay(flickerInterval);
+      tlc.setPWM(6, 0);
+      tlc.write();
+      delay(flickerInterval);
+    }
   }
 }
 
 void checkTilt() {
+  static unsigned long lastPrintTime = 0;          // Tracks the last print time for Serial
+  static unsigned long insufficientTiltStart = 0; // Tracks when the insufficient tilt state began
+  static bool isInsufficientTilt = false;         // Tracks whether the user is in the insufficient tilt state
+
   int16_t ax, ay, az;
   mpu.getAcceleration(&ax, &ay, &az);
   float angle = atan2(ay, az) * 180 / PI;
 
   angle = angle - offset;
+  unsigned long currentTime = millis(); // Get the current time
+
   if (abs(angle) > minTiltAngle) {
     if (!exerciseStarted) {
       exerciseStartTime = millis();
       Serial.println("Exercise started!");
-      playTrack(13, volume);
+      playTrack(13, volume); // Notify the user that the exercise timer has started
       exerciseStarted = true;
+
+      // Reset insufficient tilt tracking
+      isInsufficientTilt = false;
+      insufficientTiltStart = 0;
     } else {
-      Serial.print("Tilt Angle: ");
-      Serial.println(angle);
+      // Print only if 1 second has passed since the last print
+      if (currentTime - lastPrintTime >= 1000) {
+        Serial.print("Tilt Angle: ");
+        Serial.println(angle);
+
+        unsigned long elapsedTime = millis() - exerciseStartTime;
+        unsigned long remainingTime = exerciseDuration - elapsedTime;
+
+        Serial.print("Time remaining: ");
+        Serial.print(remainingTime / 1000);
+        Serial.println(" seconds");
+
+        lastPrintTime = currentTime; // Update the last print time
+      }
 
       unsigned long elapsedTime = millis() - exerciseStartTime;
-      unsigned long remainingTime = exerciseDuration - elapsedTime;
-
-      Serial.print("Time remaining: ");
-      Serial.print(remainingTime / 1000);
-      Serial.println(" seconds");
 
       if (elapsedTime >= exerciseDuration) {
         dailyExerciseCount++;
         Serial.print("Good job! You did your exercise this time. Total Exercises Today: ");
         Serial.println(dailyExerciseCount);
-        playTrack(1, volume);  // Play exericse success sound track
+        playTrack(1, volume); // Play exercise success sound track
 
         reminderPlayed = false;
         exerciseStarted = false;
@@ -554,14 +578,38 @@ void checkTilt() {
       }
     }
   } else {
-    Serial.print("Tilt Angle: ");
-    Serial.println(angle);
+    // Print only if 1 second has passed
+    if (currentTime - lastPrintTime >= 1000) {
+      Serial.print("Tilt Angle: ");
+      Serial.println(angle);
+      lastPrintTime = currentTime; // Update the last print time
+    }
+
     if (exerciseStarted) {
       Serial.println("Went below angle threshold.");
       exerciseStarted = false;
+    } else if (abs(angle) > 0) {
+      if (!isInsufficientTilt) {
+        // User just entered insufficient tilt state
+        insufficientTiltStart = currentTime;
+        isInsufficientTilt = true;
+      } else if (currentTime - insufficientTiltStart >= 30000) {
+        Serial.println("User needs to tilt further back.");
+        playTrack(14, volume);
+
+        // Reset insufficient tilt tracking to prevent repeated track playback
+        isInsufficientTilt = false;
+        insufficientTiltStart = 0;
+      }
+    } else {
+      // Reset insufficient tilt tracking if the user stops tilting
+      isInsufficientTilt = false;
+      insufficientTiltStart = 0;
     }
   }
 }
+
+
 
 float calculateGyroOffset() {
   int16_t ax, ay, az;
@@ -602,14 +650,14 @@ void muteNotifications() {
 
   // Check if the button state has changed
   if (muteButtonState != muteLastButtonState) {
-    muteLastDebounceTime = currentTime; // Reset debounce timer
+    muteLastDebounceTime = currentTime;  // Reset debounce timer
   }
 
   // If debounce delay has elapsed, consider the state stable
   if ((currentTime - muteLastDebounceTime) > muteDebounceDelay) {
     // If the button is pressed (LOW) and wasn't pressed before
     if (muteButtonState == LOW && !muteButtonPressed) {
-      muteButtonPressed = true; // Mark button as pressed
+      muteButtonPressed = true;  // Mark button as pressed
 
       // Toggle mute state
       if (volume != 0) {
@@ -617,18 +665,17 @@ void muteNotifications() {
         playTrack(7, volume);
         volume = 0;
       } else {
-        volume = 18; // Re-enable tilt notifications
+        volume = 18;  // Re-enable tilt notifications
         Serial.println("Tilt reminders have been enabled.");
         playTrack(8, volume);
       }
     }
     // If the button is released (HIGH) and was previously pressed
     else if (muteButtonState == HIGH && muteButtonPressed) {
-      muteButtonPressed = false; // Reset the pressed state
+      muteButtonPressed = false;  // Reset the pressed state
     }
   }
 
   // Save the current button state for the next loop
   muteLastButtonState = muteButtonState;
 }
-
