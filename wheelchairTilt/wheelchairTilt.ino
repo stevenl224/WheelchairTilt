@@ -64,8 +64,9 @@ int exerciseDuration = duration1;  // initialze it to level 1
 
 long exerciseWindow = interval;           // The window of time they have to do the exercise
 const unsigned long minTiltAngle = 15;    // Minimum angle they need to tilt to in order to begin exercise
-const int dayOfMonth = 2;                 // Configures day of the month for rtc (not super important but you should update when uploading to project)
+const int dayOfMonth = 11;                 // Configures day of the month for rtc (not super important but you should update when uploading to project)
 int reminderDuration = 1 * MINUTE;  // Once exercise begins it reminds them they should be tilting after this much of a delay
+int DEFAULT_VOLUME = 25;
 
 // --------------- Gyroscope SETUP ---------------
 
@@ -135,7 +136,7 @@ SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
 // Create the DF player object
 DFRobotDFPlayerMini player;
 
-int volume = 18;
+int volume = 25;
 bool reminderPlayed = false;
 
 const int muteButtonPin = 13;  // connect one side of the button to this pin and the other to GND
@@ -213,7 +214,7 @@ void setup() {
   int testHour = testtime.substring(0, 2).toInt();
   int testMinute = testtime.substring(3, 5).toInt();
   int testSecond = testtime.substring(6, 8).toInt();
-  RTCTime startTime(dayOfMonth, Month::NOVEMBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
+  RTCTime startTime(dayOfMonth, Month::DECEMBER, 2024, testHour, testMinute, testSecond, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
   RTC.setTime(startTime);
 
   offset = calculateGyroOffset();
@@ -436,7 +437,7 @@ void loop() {
   } else {
     Serial.println("Board Inactive");
     active = false;
-    volume = 18;
+    volume = DEFAULT_VOLUME;
     dailyExerciseCount = 0;
     resetLEDs();
   }
@@ -665,7 +666,7 @@ void muteNotifications() {
         playTrack(7, volume);
         volume = 0;
       } else {
-        volume = 18;  // Re-enable tilt notifications
+        volume = DEFAULT_VOLUME;  // Re-enable tilt notifications
         Serial.println("Tilt reminders have been enabled.");
         playTrack(8, volume);
       }
